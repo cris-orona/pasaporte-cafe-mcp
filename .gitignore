@@ -1,0 +1,9 @@
+/target/
+.env
+.env.*
+!.env.example
+.mcp.json
+.pi/
+evidence/
+*.log
+.DS_Store
