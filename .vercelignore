@@ -1,0 +1,12 @@
+.git/
+.vercel/
+node_modules/
+target/
+hosted/bin/
+evidence/
+.env
+.env.*
+.mcp.json
+.pi/
+*.log
+.DS_Store
