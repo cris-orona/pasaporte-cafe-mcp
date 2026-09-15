@@ -1,67 +1,102 @@
 # Pasaporte Café MCP
 
-An unofficial Rust MCP server for Pasaporte del Café de Especialidad, the CDMX specialty-coffee passport. Uses the service's existing HTTPS endpoints; no official API is available. Speaks JSON-RPC MCP over stdio.
+An unofficial Rust [Model Context Protocol](https://modelcontextprotocol.io/) server for **Pasaporte del Café de Especialidad**, the CDMX specialty-coffee passport. Explore cafés, see passport progress, and optionally record visits and reviews from an MCP client.
 
-## Build and check
+Uses the service's existing HTTPS endpoints, not an official API. Runs locally over stdio (newline-delimited JSON-RPC); no hosted service or HTTP gateway is included. Not affiliated with or endorsed by Pasaporte del Café de Especialidad.
+
+## Build
+
+Install Rust and Cargo. CI uses Rust 1.98.0.
 
 ```sh
 cargo build --release --locked
 cargo test --locked
 ```
 
-Binary: `target/release/pasaporte-cafe-mcp`. This initial import has no Rust unit tests yet; `cargo test` verifies compilation, not live behavior.
+Binary: `target/release/pasaporte-cafe-mcp`. Tests use synthetic inputs and local subprocesses without provider credentials. They cover configuration, write-tool visibility and enforcement, and basic MCP messages—not live provider behavior.
 
-## Configuration
+## Connect an MCP client
 
-Supply secrets through your local MCP client's environment or credential store. Never commit credentials.
-
-| Environment variable | Purpose |
-| --- | --- |
-| `PASAPORTE_LOGIN` | Account email or username |
-| `PASAPORTE_PASSWORD` | Account password |
-| `PASAPORTE_DISABLE_CHECKIN` | `1`, `true`, or `yes` hides and blocks check-in/review write tools; otherwise enabled |
-| `PASAPORTE_BASE_URL` | Optional endpoint override; default is `https://pasaportedelcafedeespecialidad.com` |
-
-Credentials are sent to the configured host's login endpoint; cookies stay in memory. Only override the base URL with a trusted target. `PASAPORTE_ALLOW_CHECKIN` is not read by the current implementation.
-
-Example Pi registration (replace the binary path, keep secrets in your environment):
+Add a stdio server to your client's configuration, replacing the absolute binary path:
 
 ```json
 {
   "mcpServers": {
     "pasaporte-cafe": {
-      "command": "/absolute/path/to/target/release/pasaporte-cafe-mcp",
-      "env": {
-        "PASAPORTE_LOGIN": "${PASAPORTE_LOGIN}",
-        "PASAPORTE_PASSWORD": "${PASAPORTE_PASSWORD}",
-        "PASAPORTE_DISABLE_CHECKIN": "0"
-      },
-      "approveTools": ["check_in", "submit_review", "log_visit"]
+      "command": "/absolute/path/to/target/release/pasaporte-cafe-mcp"
     }
   }
 }
 ```
 
-Reload Pi after adding the registration. Require explicit approval before check-ins. Check-ins need the on-site QR token and your real GPS position; never use fabricated coordinates or register a visit you did not make. This import does not verify a live check-in.
+Client configuration formats vary. Supply account credentials through your client's local environment or credential store; never commit them. A GUI client may not inherit your shell environment. Restart or reload the client after configuration changes.
+
+| Environment variable | Purpose |
+| --- | --- |
+| `PASAPORTE_LOGIN` | Account email or username; required for account tools |
+| `PASAPORTE_PASSWORD` | Account password; required for account tools |
+| `PASAPORTE_ALLOW_CHECKIN` | Explicitly enables **all three write tools** when set to `1`, `true`, or `yes`; disabled by default |
+| `PASAPORTE_DISABLE_CHECKIN` | Legacy kill switch: `1`, `true`, or `yes` hides and blocks writes even when allow is set |
+| `PASAPORTE_BASE_URL` | Optional trusted endpoint override; default `https://pasaportedelcafedeespecialidad.com` |
+
+Flag values are case-sensitive. Unset, empty, or unrecognized allow values do not enable writes. Setting only `PASAPORTE_DISABLE_CHECKIN=0` no longer enables them.
+
+Compatibility aliases: `PASAPORTE_EMAIL`, `PASAPORTE_USER`, `PASAPORTE_IDENTIFIER` for login; `PASAPORTE_PASS` for password. The first nonempty value wins in the order listed, with the primary name first.
+
+Credentials are sent to the configured host's login endpoint; session cookies stay in memory. Use only a trusted base URL. See [SECURITY.md](SECURITY.md) for privacy and operating limits.
 
 ## Tools
 
-- `whoami`: profile, level, points, rank and account details. **Includes raw private profile data.**
-- `my_passport`: visited/remaining café counts by borough.
-- `nearby_cafes`: nearby cafés for supplied coordinates.
-- `cafe_directory`, `cafe_detail`: café directory and individual information.
-- `user_leaderboard`, `cafe_leaderboard`: public rankings.
-- `place_report`, `busiest_places`: café activity and scores.
-- `check_in`: registers a visit; enabled by default, can be disabled as above.
-- `submit_review`: posts café ratings; uses the same write-tool enable flag.
-- `log_visit`: check-in followed by a review, using the same flag. Not atomic: a review failure can leave the check-in recorded.
+Available by default:
 
-## Public website boundary
+| Tool | Purpose |
+| --- | --- |
+| `whoami` | Profile, level, points and rank; **includes raw private profile data** |
+| `my_passport` | Visited/remaining café counts by borough |
+| `nearby_cafes` | Nearby cafés for supplied coordinates |
+| `cafe_directory` | Café directory, optionally filtered by borough |
+| `cafe_detail` | Individual café information |
+| `user_leaderboard` | Public user rankings |
+| `cafe_leaderboard` | Public café rankings |
+| `place_report` | Café activity, scores and contact details |
+| `busiest_places` | Cafés ranked by review activity |
 
-Do not expose this server, its credentials, or raw responses to website visitors. The personal website currently uses a manually curated snapshot containing only approved level, points, visited/total counts, café names, and observation date. Email, internal IDs, passport numbers, precise visit times, QR tokens, login data and write tools stay private.
+Optional, with `PASAPORTE_ALLOW_CHECKIN=1`:
 
-No HTTP gateway, public-card exporter, automatic sync, hosted server or deployment is included. The existing local Pi installation can continue using its current binary; this source import does not replace or restart it.
+| Tool | Purpose |
+| --- | --- |
+| `check_in` | Records a visit on your account and the shared leaderboard |
+| `submit_review` | Posts four ratings (0–100) and an optional comment; no QR or GPS required by this tool |
+| `log_visit` | Check-in followed by a review; **not atomic** |
 
-## Limitations
+Disabled write tools are both omitted from `tools/list` and rejected when called directly. Opt-in is permission to expose the tools, not per-call confirmation. Configure your MCP client to ask for approval before each write. Only submit visits and ratings the user actually intends; don't invent reviews or automate bulk activity.
 
-This is an initial import of local source, not a hardened public service. The source includes review tools beyond the current Pi registration's ten-tool allowlist; importing it does not widen that registration. Existing code can resolve QR tokens automatically and offers a `use_cafe_location` option that simulates presence. Do not use simulated presence for real visits or expose these tools publicly. The write tools are not safe for unattended retries; `log_visit` may partially succeed. These inherited behaviors have not been changed or exercised during import. Provider endpoints and check-in field names may change. Avoid unnecessary requests. Do not run authenticated smoke tests in CI or publish profile output. The service and its branding belong to their respective owners; this project is not affiliated with or endorsed by them.
+### QR and location behavior
+
+A physical QR is not required by this client. If `qr_token` is omitted, it attempts to resolve the token from the café's public `review_url`. This depends on the provider continuing to expose that field.
+
+For check-ins, supply `lat` and `lng`, or explicitly choose `use_cafe_location=true` to use the café's published coordinates when a complete coordinate pair is absent. **Café coordinates are not measured device GPS or proof that the user is there.** This client does not verify physical presence; provider-side acceptance and restrictions are not guaranteed. QR lookup alone does not submit a visit.
+
+Check-ins and reviews create real account activity. Do not automatically retry them: a timeout may occur after a write succeeds. `log_visit` can record a check-in even if review validation or submission fails; inspect account state before attempting recovery.
+
+## Privacy and limitations
+
+- Keep this server and its credentials local. Do not expose raw responses or write tools to public website visitors.
+- Responses may contain email, internal IDs, passport details, precise visit times, QR tokens, and other private data. Review client logging and model-provider data handling before use.
+- Provider endpoints and field names may change. Review fields remain provisional; automated tests do not prove live review or check-in acceptance.
+- This is a small unofficial client, not a hardened public service. Avoid unnecessary requests and respect the provider's rules.
+- No automatic sync, public-card exporter, deployment, or change to an existing local installation is included.
+
+## Development
+
+```sh
+cargo fmt --check
+cargo check --locked
+cargo test --locked
+```
+
+Keep tests offline, use synthetic data, and never attach real account responses or credentials to issues or pull requests.
+
+## License
+
+[MIT](LICENSE). The license covers this project's code, not the service's branding, café content, or account data.

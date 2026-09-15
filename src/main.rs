@@ -2,8 +2,8 @@
 //!
 //! Speaks the Model Context Protocol over stdio as newline-delimited
 //! JSON-RPC 2.0. Read-first: it exposes profile, nearby cafes, leaderboards,
-//! the directory, and passport progress. Write tools are enabled by default;
-//! set PASAPORTE_DISABLE_CHECKIN=1 to hide and block them.
+//! the directory, and passport progress. Write tools are disabled by default;
+//! set PASAPORTE_ALLOW_CHECKIN=1 to opt into check-ins and reviews.
 
 mod api;
 mod tools;

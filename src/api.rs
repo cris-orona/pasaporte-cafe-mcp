@@ -31,13 +31,11 @@ impl Config {
             "PASAPORTE_IDENTIFIER",
         ]);
         let password = first_env(&["PASAPORTE_PASSWORD", "PASAPORTE_PASS"]);
-        // check_in is enabled by default now. Set PASAPORTE_DISABLE_CHECKIN=1
-        // to hide and block it again.
-        let disabled = matches!(
+        // Writes require explicit opt-in. The legacy disable flag always wins.
+        let allow_checkin = writes_enabled(
+            std::env::var("PASAPORTE_ALLOW_CHECKIN").ok().as_deref(),
             std::env::var("PASAPORTE_DISABLE_CHECKIN").ok().as_deref(),
-            Some("1") | Some("true") | Some("yes")
         );
-        let allow_checkin = !disabled;
         Config {
             base_url: base_url.trim_end_matches('/').to_string(),
             login_identifier,
@@ -45,6 +43,11 @@ impl Config {
             allow_checkin,
         }
     }
+}
+
+fn writes_enabled(allow: Option<&str>, disable: Option<&str>) -> bool {
+    let enabled = |value: Option<&str>| matches!(value, Some("1" | "true" | "yes"));
+    enabled(allow) && !enabled(disable)
 }
 
 fn first_env(keys: &[&str]) -> Option<String> {
@@ -96,8 +99,14 @@ impl Api {
         })
     }
 
-    pub fn config(&self) -> &Config {
-        &self.cfg
+    pub fn require_writes(&self) -> ApiResult<()> {
+        if self.cfg.allow_checkin {
+            Ok(())
+        } else {
+            Err(ApiError(
+                "Write tools are disabled. Set PASAPORTE_ALLOW_CHECKIN=1 and unset PASAPORTE_DISABLE_CHECKIN to enable check-ins and reviews.".into(),
+            ))
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -106,16 +115,12 @@ impl Api {
 
     /// Log in with the configured credentials. Sets the session cookie.
     pub async fn login(&self) -> ApiResult<()> {
-        let id = self
-            .cfg
-            .login_identifier
-            .as_deref()
-            .ok_or_else(|| ApiError("no credentials set: export PASAPORTE_LOGIN and PASAPORTE_PASSWORD".into()))?;
-        let pw = self
-            .cfg
-            .password
-            .as_deref()
-            .ok_or_else(|| ApiError("no credentials set: export PASAPORTE_LOGIN and PASAPORTE_PASSWORD".into()))?;
+        let id = self.cfg.login_identifier.as_deref().ok_or_else(|| {
+            ApiError("no credentials set: export PASAPORTE_LOGIN and PASAPORTE_PASSWORD".into())
+        })?;
+        let pw = self.cfg.password.as_deref().ok_or_else(|| {
+            ApiError("no credentials set: export PASAPORTE_LOGIN and PASAPORTE_PASSWORD".into())
+        })?;
 
         let resp = self
             .http
@@ -195,7 +200,8 @@ impl Api {
     }
 
     pub async fn cafe_detail(&self, id: i64) -> ApiResult<Value> {
-        self.get_public(&format!("/api/barras/public.php?id={id}")).await
+        self.get_public(&format!("/api/barras/public.php?id={id}"))
+            .await
     }
 
     /// Resolve the check-in QR token for a cafe from its public `review_url`.
@@ -206,14 +212,22 @@ impl Api {
             .get("bar")
             .and_then(|b| b.get("review_url"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ApiError(format!("cafe {bar_id} has no review_url; cannot resolve QR token")))?;
+            .ok_or_else(|| {
+                ApiError(format!(
+                    "cafe {bar_id} has no review_url; cannot resolve QR token"
+                ))
+            })?;
         // review_url looks like ".../check-in.html?qr=<TOKEN>"
         review_url
             .split("qr=")
             .nth(1)
             .map(|s| s.split(['&', '#']).next().unwrap_or(s).to_string())
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| ApiError(format!("could not extract qr token from review_url for cafe {bar_id}")))
+            .ok_or_else(|| {
+                ApiError(format!(
+                    "could not extract qr token from review_url for cafe {bar_id}"
+                ))
+            })
     }
 
     /// Return the cafe's own (latitude, longitude) from the public detail.
@@ -240,6 +254,7 @@ impl Api {
         atmosphere: u8,
         comment: Option<&str>,
     ) -> ApiResult<Value> {
+        self.require_writes()?;
         let mut body = json!({
             "bar_id": bar_id,
             "quality": quality,
@@ -254,14 +269,16 @@ impl Api {
     }
 
     pub async fn user_leaderboard(&self, region: Option<&str>) -> ApiResult<Value> {
-        self.get_public(&with_region("/api/users/leaderboard.php", region)).await
+        self.get_public(&with_region("/api/users/leaderboard.php", region))
+            .await
     }
 
     pub async fn cafe_leaderboard(&self, region: Option<&str>) -> ApiResult<Value> {
-        self.get_public(&with_region("/api/barras/leaderboard.php", region)).await
+        self.get_public(&with_region("/api/barras/leaderboard.php", region))
+            .await
     }
 
-    /// Register a visit. The tool layer enforces PASAPORTE_DISABLE_CHECKIN.
+    /// Register a visit. Requires explicit write opt-in; does not verify presence.
     /// Sends both `lat`/`lng` and `latitude`/`longitude` for compatibility.
     pub async fn check_in(
         &self,
@@ -271,6 +288,7 @@ impl Api {
         lng: f64,
         accuracy: f64,
     ) -> ApiResult<Value> {
+        self.require_writes()?;
         let body = json!({
             "bar_id": bar_id,
             "qr_token": qr_token,
@@ -309,4 +327,25 @@ async fn json_or_err(resp: reqwest::Response) -> ApiResult<Value> {
         return Err(ApiError(format!("{status}: {msg}")));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn api_write_methods_reject_calls_before_auth_or_network() {
+        let api = Api::new(Config {
+            base_url: "http://127.0.0.1:9".into(),
+            login_identifier: None,
+            password: None,
+            allow_checkin: false,
+        })
+        .unwrap();
+        let checkin = api.check_in(1, "synthetic-token", 0.0, 0.0, 20.0).await;
+        let review = api.submit_review(1, 50, 50, 50, 50, None).await;
+        for result in [checkin, review] {
+            assert!(result.unwrap_err().0.contains("Write tools are disabled"));
+        }
+    }
 }
