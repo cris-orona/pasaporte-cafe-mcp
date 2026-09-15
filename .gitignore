@@ -1,4 +1,6 @@
 /target/
+/node_modules/
+/hosted/bin/
 .env
 .env.*
 !.env.example
@@ -7,3 +9,4 @@
 evidence/
 *.log
 .DS_Store
+.vercel/
