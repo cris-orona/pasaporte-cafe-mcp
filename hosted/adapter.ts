@@ -202,7 +202,7 @@ export function createHandler(options: AdapterOptions = {}) {
     if (pathname === METADATA_PATH) {
       if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
       if (!cfg.metadataReady) return Response.json({ error: "service unavailable" }, { status: 503 });
-      return Response.json({ resource: cfg.resource, authorization_servers: [cfg.issuer], scopes_supported: ["mcp:read", "mcp:write"] });
+      return Response.json({ resource: cfg.resource, authorization_servers: [cfg.issuer], scopes_supported: cfg.allowWrites ? ["mcp:read", "mcp:write"] : ["mcp:read"] });
     }
     if (pathname !== MCP_PATH) return new Response("Not Found", { status: 404 });
     if (!cfg.dispatchReady) return Response.json({ error: "service unavailable" }, { status: 503 });

@@ -43,7 +43,13 @@ await test("configuration is deny-all and metadata is canonical", async () => {
   const metadataHandler = handler({ PUBLIC_MCP_URL: resource, AUTH0_ISSUER: issuer });
   const metadata = await metadataHandler(new Request("https://attacker.invalid/.well-known/oauth-protected-resource/pasaporte/mcp", { headers: { host: "attacker.invalid", origin: "https://evil.invalid" } }));
   assert.equal(metadata.status, 200);
-  assert.deepEqual(await metadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ["mcp:read", "mcp:write"] });
+  assert.deepEqual(await metadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ["mcp:read"] });
+  const enabled = handler({ ...baseEnv, PASAPORTE_ALLOW_CHECKIN: "1" });
+  const enabledMetadata = await enabled(new Request("https://coffee.example/.well-known/oauth-protected-resource/pasaporte/mcp"));
+  assert.deepEqual((await enabledMetadata.json() as any).scopes_supported, ["mcp:read", "mcp:write"]);
+  const disabled = handler({ ...baseEnv, PASAPORTE_ALLOW_CHECKIN: "1", PASAPORTE_DISABLE_CHECKIN: "1" });
+  const disabledMetadata = await disabled(new Request("https://coffee.example/.well-known/oauth-protected-resource/pasaporte/mcp"));
+  assert.deepEqual((await disabledMetadata.json() as any).scopes_supported, ["mcp:read"]);
 });
 
 await test("rejects missing and invalid access tokens before spawn", async () => {
