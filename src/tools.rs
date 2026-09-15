@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::api::{Api, ApiError};
 
 /// Return the tool list advertised to the MCP client.
-/// Write tools are listed unless the operator disabled them.
+/// Write tools are listed only after explicit operator opt-in.
 pub fn tool_list(allow_checkin: bool) -> Value {
     let mut tools = vec![
         json!({
@@ -97,7 +97,7 @@ pub fn tool_list(allow_checkin: bool) -> Value {
     if allow_checkin {
         tools.push(json!({
             "name": "check_in",
-            "description": "Register a verified presence visit to a cafe. Writes to the shared leaderboard. The QR token is fetched automatically from the cafe id unless you pass one. GPS is validated near the cafe: pass your real lat/lng, or set use_cafe_location=true to use the cafe's own coordinates (this simulates presence).",
+            "description": "Register a cafe visit on your account and the shared leaderboard. Require user approval before submitting real account activity. The QR token is fetched from the public cafe detail unless supplied. Pass lat/lng or explicitly set use_cafe_location=true to submit the cafe's coordinates, NOT measured device GPS. This client does not verify physical presence. Do not automatically retry.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -106,7 +106,7 @@ pub fn tool_list(allow_checkin: bool) -> Value {
                     "lat": { "type": "number", "description": "Your real device latitude" },
                     "lng": { "type": "number", "description": "Your real device longitude" },
                     "accuracy": { "type": "number", "description": "GPS accuracy in meters (default 20)" },
-                    "use_cafe_location": { "type": "boolean", "description": "If true and lat/lng omitted, use the cafe's own coordinates" }
+                    "use_cafe_location": { "type": "boolean", "description": "Explicitly use the cafe's published coordinates when device coordinates are absent. Not measured GPS or proof of presence." }
                 },
                 "required": ["bar_id"],
                 "additionalProperties": false
@@ -114,7 +114,7 @@ pub fn tool_list(allow_checkin: bool) -> Value {
         }));
         tools.push(json!({
             "name": "submit_review",
-            "description": "Submit your rating for a cafe: four scores 0-100 (quality, service, recommendation, atmosphere) plus an optional comment. Posts to reviews/submit.php. Field names are provisional until confirmed live.",
+            "description": "Submit a real account review: four scores 0-100 (quality, service, recommendation, atmosphere) plus an optional comment. Require user approval; do not invent ratings or automatically retry. Does not require a QR token or coordinates. Field names are provisional until confirmed live.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -131,7 +131,7 @@ pub fn tool_list(allow_checkin: bool) -> Value {
         }));
         tools.push(json!({
             "name": "log_visit",
-            "description": "Convenience: check in at a cafe and then submit your rating in one call. Same fields as check_in plus the four scores and an optional comment.",
+            "description": "Check in and then submit a real account review. Require user approval. Not atomic: check-in may succeed even if the review fails; do not automatically retry. Same fields as check_in, including optional QR lookup and explicitly selected cafe coordinates (not verified device GPS), plus ratings and an optional comment.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -140,7 +140,7 @@ pub fn tool_list(allow_checkin: bool) -> Value {
                     "lat": { "type": "number" },
                     "lng": { "type": "number" },
                     "accuracy": { "type": "number" },
-                    "use_cafe_location": { "type": "boolean" },
+                    "use_cafe_location": { "type": "boolean", "description": "Explicitly use published cafe coordinates, not measured device GPS or proof of presence." },
                     "quality": { "type": "integer", "minimum": 0, "maximum": 100 },
                     "service": { "type": "integer", "minimum": 0, "maximum": 100 },
                     "recommendation": { "type": "integer", "minimum": 0, "maximum": 100 },
@@ -209,12 +209,20 @@ async fn whoami(api: &Api) -> Result<String, ApiError> {
                     .iter()
                     .find(|x| x.get("rank").and_then(|r| r.as_i64()) == Some(rank - 1))
                 {
-                    let ap = above.get("points").and_then(|v| v.as_i64()).unwrap_or(points);
+                    let ap = above
+                        .get("points")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(points);
                     let name = above
                         .get("username")
                         .and_then(|v| v.as_str())
                         .unwrap_or("the user above");
-                    gap_line = format!("\nGap to rank {}: {} ({} points ahead)", rank - 1, name, ap - points);
+                    gap_line = format!(
+                        "\nGap to rank {}: {} ({} points ahead)",
+                        rank - 1,
+                        name,
+                        ap - points
+                    );
                 }
             }
         }
@@ -252,13 +260,19 @@ async fn nearby(api: &Api, args: &Value) -> Result<String, ApiError> {
             lines.push(format!(
                 "- {} [{}] — {} (id {})",
                 b.get("shop_name").and_then(|x| x.as_str()).unwrap_or("?"),
-                b.get("distance_label").and_then(|x| x.as_str()).unwrap_or("?"),
+                b.get("distance_label")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("?"),
                 b.get("address").and_then(|x| x.as_str()).unwrap_or(""),
                 b.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
             ));
         }
     }
-    Ok(format!("{}\n\n--- raw ---\n{}", lines.join("\n"), pretty(&v)))
+    Ok(format!(
+        "{}\n\n--- raw ---\n{}",
+        lines.join("\n"),
+        pretty(&v)
+    ))
 }
 
 async fn directory(api: &Api, args: &Value) -> Result<String, ApiError> {
@@ -285,7 +299,9 @@ async fn directory(api: &Api, args: &Value) -> Result<String, ApiError> {
         lines.push(format!(
             "- {} [{}] — {} (id {})",
             b.get("shop_name").and_then(|x| x.as_str()).unwrap_or("?"),
-            b.get("alcaldia_key").and_then(|x| x.as_str()).unwrap_or("?"),
+            b.get("alcaldia_key")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?"),
             b.get("address").and_then(|x| x.as_str()).unwrap_or(""),
             b.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
         ));
@@ -333,7 +349,9 @@ async fn my_passport(api: &Api) -> Result<String, ApiError> {
 
     let total = bars.len();
     let visited = visited_ids.len();
-    let mut lines = vec![format!("Visited {visited} of {total} cafes.\n\nBy borough:")];
+    let mut lines = vec![format!(
+        "Visited {visited} of {total} cafes.\n\nBy borough:"
+    )];
     for (k, (v, t)) in &per_borough {
         lines.push(format!("  {k}: {v}/{t}"));
     }
@@ -375,12 +393,20 @@ async fn place_report(api: &Api, args: &Value) -> Result<String, ApiError> {
         format!("Official: {}", s(&bar, "official_name")),
         format!("Address: {}", {
             let a = s(&bar, "display_address");
-            if a.is_empty() { s(&bar, "address") } else { a }
+            if a.is_empty() {
+                s(&bar, "address")
+            } else {
+                a
+            }
         }),
         format!(
             "GPS: {}, {}",
-            n(&bar, "latitude").map(|x| x.to_string()).unwrap_or_default(),
-            n(&bar, "longitude").map(|x| x.to_string()).unwrap_or_default()
+            n(&bar, "latitude")
+                .map(|x| x.to_string())
+                .unwrap_or_default(),
+            n(&bar, "longitude")
+                .map(|x| x.to_string())
+                .unwrap_or_default()
         ),
         format!("Score: {score} ({rank}) [{}]", s(&stats, "score_status")),
         format!(
@@ -401,7 +427,11 @@ async fn place_report(api: &Api, args: &Value) -> Result<String, ApiError> {
 
     let email = {
         let e = s(&bar, "public_email");
-        if e.is_empty() { s(&bar, "admin_email") } else { e }
+        if e.is_empty() {
+            s(&bar, "admin_email")
+        } else {
+            e
+        }
     };
     if !email.is_empty() {
         out.push(format!("Contact: {email}"));
@@ -459,10 +489,17 @@ async fn busiest_places(api: &Api, args: &Value) -> Result<String, ApiError> {
             "{:>2}. {} — reviewers {}, visits {} (verified {}), score {} (id {})",
             idx + 1,
             c.get("shop_name").and_then(|x| x.as_str()).unwrap_or("?"),
-            c.get("unique_reviewer_count").and_then(|x| x.as_i64()).unwrap_or(0),
+            c.get("unique_reviewer_count")
+                .and_then(|x| x.as_i64())
+                .unwrap_or(0),
             c.get("total_visits").and_then(|x| x.as_i64()).unwrap_or(0),
-            c.get("verified_visits").and_then(|x| x.as_i64()).unwrap_or(0),
-            c.get("public_score").and_then(|x| x.as_f64()).map(|x| format!("{x:.1}")).unwrap_or_else(|| "—".into()),
+            c.get("verified_visits")
+                .and_then(|x| x.as_i64())
+                .unwrap_or(0),
+            c.get("public_score")
+                .and_then(|x| x.as_f64())
+                .map(|x| format!("{x:.1}"))
+                .unwrap_or_else(|| "—".into()),
             c.get("id").and_then(|x| x.as_i64()).unwrap_or(0),
         ));
     }
@@ -476,11 +513,7 @@ async fn resolve_checkin_args(
     api: &Api,
     args: &Value,
 ) -> Result<(i64, String, f64, f64, f64), ApiError> {
-    if !api.config().allow_checkin {
-        return Err(ApiError(
-            "check_in is disabled. Unset PASAPORTE_DISABLE_CHECKIN to enable it.".into(),
-        ));
-    }
+    api.require_writes()?;
     let bar_id = args
         .get("bar_id")
         .and_then(|v| v.as_i64())
@@ -507,7 +540,10 @@ async fn resolve_checkin_args(
             ))
         }
     };
-    let accuracy = args.get("accuracy").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    let accuracy = args
+        .get("accuracy")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(20.0);
     Ok((bar_id, qr, lat, lng, accuracy))
 }
 
@@ -529,11 +565,7 @@ fn score(args: &Value, key: &str) -> Result<u8, ApiError> {
 }
 
 async fn submit_review(api: &Api, args: &Value) -> Result<String, ApiError> {
-    if !api.config().allow_checkin {
-        return Err(ApiError(
-            "submit_review is disabled. Unset PASAPORTE_DISABLE_CHECKIN to enable it.".into(),
-        ));
-    }
+    api.require_writes()?;
     let bar_id = args
         .get("bar_id")
         .and_then(|v| v.as_i64())
@@ -545,7 +577,14 @@ async fn submit_review(api: &Api, args: &Value) -> Result<String, ApiError> {
     let comment = args.get("comment").and_then(|v| v.as_str());
 
     let v = api
-        .submit_review(bar_id, quality, service, recommendation, atmosphere, comment)
+        .submit_review(
+            bar_id,
+            quality,
+            service,
+            recommendation,
+            atmosphere,
+            comment,
+        )
         .await?;
     Ok(pretty(&v))
 }
@@ -561,7 +600,14 @@ async fn log_visit(api: &Api, args: &Value) -> Result<String, ApiError> {
     let atmosphere = score(args, "atmosphere")?;
     let comment = args.get("comment").and_then(|v| v.as_str());
     let review = api
-        .submit_review(bar_id, quality, service, recommendation, atmosphere, comment)
+        .submit_review(
+            bar_id,
+            quality,
+            service,
+            recommendation,
+            atmosphere,
+            comment,
+        )
         .await?;
 
     Ok(format!(
