@@ -89,11 +89,11 @@ Check-ins and reviews create real account activity. Do not automatically retry t
 
 ## Optional personal Vercel adapter
 
-`api/` and `hosted/` provide a Node 22 stateless Streamable HTTP resource-server adapter at `/mcp`. It does not reimplement tools: every list or call runs the packaged Rust stdio binary as a short-lived, bounded child. This repository contains build/deployment configuration only; it does not create or mutate Auth0 or Vercel accounts.
+`api/` and `hosted/` provide a Node 22 stateless Streamable HTTP resource-server adapter at `/pasaporte/mcp`. The deployment can share a hostname with future services on other paths; this is not a combined MCP gateway. It does not reimplement tools: every list or call runs the packaged Rust stdio binary as a short-lived, bounded child. This repository contains build/deployment configuration only; it does not create or mutate Auth0 or Vercel accounts.
 
 Create an Auth0 API with:
 
-- **Identifier and default audience:** the exact `PUBLIC_MCP_URL`, including HTTPS and `/mcp` (for example `https://your-project.example/mcp`). This must produce API **access tokens**, not ID tokens.
+- **Identifier and default audience:** the exact `PUBLIC_MCP_URL`, including HTTPS and `/pasaporte/mcp` (for example `https://mcp.example.com/pasaporte/mcp`). This must produce API **access tokens**, not ID tokens.
 - **Signing algorithm:** RS256.
 - **Permissions:** `mcp:read` and, only if writes are wanted, `mcp:write`. Enable Auth0 RBAC/permission inclusion so the access token's space-separated `scope` claim contains granted permissions.
 - Manual CIMD registration is preferred. Import the exact ChatGPT CIMD URL shown by ChatGPT, or create a static client and allowlist the exact callback shown by ChatGPT. Where issuer identification is supported the stable callback is `https://chatgpt.com/connector_platform_oauth_redirect`; otherwise ChatGPT shows a callback-specific URL. Do not guess either value.
@@ -102,14 +102,14 @@ Set these Vercel production environment variables (never commit values):
 
 | Variable | Requirement |
 | --- | --- |
-| `PUBLIC_MCP_URL` | Canonical exact HTTPS URL ending in `/mcp`; also the Auth0 API identifier/audience |
+| `PUBLIC_MCP_URL` | Canonical exact HTTPS URL with path `/pasaporte/mcp`; also the Auth0 API identifier/audience |
 | `AUTH0_ISSUER` | Exact HTTPS Auth0 issuer, including its documented trailing slash if present |
 | `MCP_OWNER_SUB` | Exact Auth0 access-token `sub` belonging to the sole allowed owner; absent means deny-all |
 | `PASAPORTE_LOGIN`, `PASAPORTE_PASSWORD` | Required provider credentials |
 | `PASAPORTE_ALLOW_CHECKIN` | Optional explicit `1`, `true`, or `yes` write opt-in |
 | `PASAPORTE_DISABLE_CHECKIN` | Optional kill switch; a true value always overrides the allow flag |
 
-The adapter derives JWKS only from `AUTH0_ISSUER` at `/.well-known/jwks.json`, pins the Pasaporte provider URL, and accepts only RS256 tokens with exact issuer, `PUBLIC_MCP_URL` audience, expiration, exact owner subject, and `mcp:read`. Writes additionally require both `mcp:write` and operator opt-in. No OAuth endpoints, token storage, sessions, or fallback authentication are included; Auth0 remains the managed authorization server. Protected-resource metadata is public at `/.well-known/oauth-protected-resource` once resource and issuer are valid.
+The adapter derives JWKS only from `AUTH0_ISSUER` at `/.well-known/jwks.json`, pins the Pasaporte provider URL, and accepts only RS256 tokens with exact issuer, `PUBLIC_MCP_URL` audience, expiration, exact owner subject, and `mcp:read`. Writes additionally require both `mcp:write` and operator opt-in. No OAuth endpoints, token storage, sessions, or fallback authentication are included; Auth0 remains the managed authorization server. Protected-resource metadata is public at `/.well-known/oauth-protected-resource/pasaporte/mcp` once resource and issuer are valid, keeping discovery separate from future MCPs on this hostname.
 
 Install/build checks using Node 22:
 
@@ -121,7 +121,7 @@ npm test                             # synthetic JWTs/local keys; no provider ne
 npm run build                        # Rust 1.98 release binary + typecheck
 ```
 
-Before deployment, manually confirm Auth0 discovery advertises S256 PKCE and the intended CIMD/static-client mode, grants only the owner the requested API permissions, and issues an RS256 JWT access token whose `aud` exactly equals `PUBLIC_MCP_URL`. Then configure ChatGPT with the deployed `/mcp` URL and OAuth. Deployment and live-provider verification are intentionally out of scope.
+Before deployment, manually confirm Auth0 discovery advertises S256 PKCE and the intended CIMD/static-client mode, grants only the owner the requested API permissions, and issues an RS256 JWT access token whose `aud` equals `PUBLIC_MCP_URL` or contains it as an exact array member. Auth0 legitimately issues multi-audience tokens that include both your API and `/userinfo`; tokens without your API audience are rejected. Then configure ChatGPT with the deployed `/pasaporte/mcp` URL and OAuth. Deployment and live-provider verification are intentionally out of scope.
 
 References: [MCP authorization](https://modelcontextprotocol.io/specification/latest/basic/authorization), [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728), [Auth0 MCP authorization](https://auth0.com/ai/docs/mcp/intro/overview), [OpenAI authentication guidance](https://developers.openai.com/apps-sdk/build/auth/), and [Vercel MCP deployment](https://vercel.com/docs/mcp/deploy-mcp-servers-to-vercel).
 

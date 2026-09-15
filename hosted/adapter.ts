@@ -7,6 +7,8 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const PASAPORTE_BASE_URL = "https://pasaportedelcafedeespecialidad.com";
+const MCP_PATH = "/pasaporte/mcp";
+const METADATA_PATH = `/.well-known/oauth-protected-resource${MCP_PATH}`;
 const WRITE_TOOLS = new Set(["check_in", "submit_review", "log_visit"]);
 const MAX_BODY = 256 * 1024;
 const MAX_OUTPUT = 1024 * 1024;
@@ -44,7 +46,7 @@ function exactHttpsUrl(value: string | undefined, requiredPath?: string): URL | 
 }
 
 function config(env: NodeJS.ProcessEnv): Config {
-  const resourceUrl = exactHttpsUrl(env.PUBLIC_MCP_URL, "/mcp");
+  const resourceUrl = exactHttpsUrl(env.PUBLIC_MCP_URL, MCP_PATH);
   const issuerUrl = exactHttpsUrl(env.AUTH0_ISSUER);
   const owner = env.MCP_OWNER_SUB ?? "";
   const login = env.PASAPORTE_LOGIN ?? "";
@@ -63,7 +65,7 @@ function config(env: NodeJS.ProcessEnv): Config {
 
 function metadataUrl(cfg: Config): string {
   const url = new URL(cfg.resource);
-  url.pathname = "/.well-known/oauth-protected-resource";
+  url.pathname = METADATA_PATH;
   return url.href;
 }
 
@@ -197,12 +199,12 @@ export function createHandler(options: AdapterOptions = {}) {
   return async (request: Request): Promise<Response> => {
     const cfg = config(env);
     const pathname = new URL(request.url).pathname;
-    if (pathname === "/.well-known/oauth-protected-resource") {
+    if (pathname === METADATA_PATH) {
       if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
       if (!cfg.metadataReady) return Response.json({ error: "service unavailable" }, { status: 503 });
       return Response.json({ resource: cfg.resource, authorization_servers: [cfg.issuer], scopes_supported: ["mcp:read", "mcp:write"] });
     }
-    if (pathname !== "/mcp") return new Response("Not Found", { status: 404 });
+    if (pathname !== MCP_PATH) return new Response("Not Found", { status: 404 });
     if (!cfg.dispatchReady) return Response.json({ error: "service unavailable" }, { status: 503 });
     const origin = request.headers.get("origin");
     if (origin && origin !== new URL(cfg.resource).origin) return new Response("Forbidden", { status: 403 });

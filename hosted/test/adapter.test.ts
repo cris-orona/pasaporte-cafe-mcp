@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { generateKeyPair, SignJWT } from "jose";
 import { createHandler, type AdapterOptions } from "../adapter.js";
 
-const resource = "https://coffee.example/mcp";
+const resource = "https://coffee.example/pasaporte/mcp";
 const issuer = "https://tenant.example/";
 const owner = "auth0|owner";
 const baseEnv = {
@@ -41,7 +41,7 @@ await test("configuration is deny-all and metadata is canonical", async () => {
   const unavailable = await handler({})(request(listRpc, await token()));
   assert.equal(unavailable.status, 503);
   const metadataHandler = handler({ PUBLIC_MCP_URL: resource, AUTH0_ISSUER: issuer });
-  const metadata = await metadataHandler(new Request("https://attacker.invalid/.well-known/oauth-protected-resource", { headers: { host: "attacker.invalid", origin: "https://evil.invalid" } }));
+  const metadata = await metadataHandler(new Request("https://attacker.invalid/.well-known/oauth-protected-resource/pasaporte/mcp", { headers: { host: "attacker.invalid", origin: "https://evil.invalid" } }));
   assert.equal(metadata.status, 200);
   assert.deepEqual(await metadata.json(), { resource, authorization_servers: [issuer], scopes_supported: ["mcp:read", "mcp:write"] });
 });
@@ -52,6 +52,7 @@ await test("rejects missing and invalid access tokens before spawn", async () =>
     .setProtectedHeader({ alg: "RS256" }).sign(attackerKey);
   const cases: Array<[string, string | undefined]> = [
     ["forged signature", forged],
+    ["array without resource audience", await token({ aud: ["https://another.example", `${issuer}userinfo`] })],
     ["missing", undefined], ["malformed", "nope"], ["expired", await token({ exp: 1 })],
     ["wrong algorithm", await token({}, "HS256")], ["wrong issuer", await token({ iss: "https://wrong.example/" })],
     ["wrong audience / ID token", await token({ aud: "client-id" })], ["wrong owner", await token({ sub: "auth0|other" })],
@@ -61,7 +62,7 @@ await test("rejects missing and invalid access tokens before spawn", async () =>
   for (const [name, bearer] of cases) {
     const response = await handler(baseEnv, { binaryPath: "/must-not-spawn" })(request(listRpc, bearer));
     assert.equal(response.status, 401, name);
-    assert.match(response.headers.get("www-authenticate") ?? "", /https:\/\/coffee\.example\/\.well-known\/oauth-protected-resource/);
+    assert.match(response.headers.get("www-authenticate") ?? "", /https:\/\/coffee\.example\/\.well-known\/oauth-protected-resource\/pasaporte\/mcp/);
   }
 });
 
@@ -85,6 +86,19 @@ await test("actual Rust bridge initializes and lists authoritative annotated too
   assert.ok(tools.some((tool: any) => tool.name === "cafe_directory"));
   assert.ok(tools.every((tool: any) => tool.annotations.readOnlyHint === true));
   assert.deepEqual(tools[0].securitySchemes, [{ type: "oauth2", scopes: ["mcp:read"] }]);
+});
+
+await test("Auth0 multi-audience access tokens include the exact resource", async () => {
+  const response = await handler(baseEnv, { binaryPath: "target/debug/pasaporte-cafe-mcp" })(request(listRpc, await token({ aud: [resource, `${issuer}userinfo`] })));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as any).result.tools.length, 9);
+});
+
+await test("unassigned MCP paths are not exposed", async () => {
+  const h = handler(baseEnv, { binaryPath: "/must-not-spawn" });
+  for (const path of ["/mcp", "/another-service/mcp", "/.well-known/oauth-protected-resource"]) {
+    assert.equal((await h(new Request(`https://coffee.example${path}`))).status, 404);
+  }
 });
 
 await test("write listing and direct calls require both scope and operator opt-in", async () => {
